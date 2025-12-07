@@ -1,0 +1,241 @@
+import pandas as pd
+import numpy as np
+import re
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from catboost import CatBoostRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import r2_score
+
+def split_memory(mem):
+    mem = mem.replace('Flash Storage', 'Flash')
+    parts = mem.split('+')
+    
+    ssd = hdd = hybrid = flash = 0
+    
+    for p in parts:
+        p = p.strip()
+        
+        num = re.findall(r'\d+\.?\d*', p)
+        if not num:
+            continue
+        
+        size = float(num[0])
+        
+        if 'TB' in p:
+            size *= 1000
+    
+        if 'SSD' in p:
+            ssd += size
+        elif 'HDD' in p:
+            hdd += size
+        elif 'Hybrid' in p:
+            hybrid += size
+        elif 'Flash' in p:
+            flash += size
+    
+    return pd.Series([ssd, hdd, hybrid, flash])
+
+def cpu_tier(cpu):
+    cpu = cpu.lower()
+
+    if "celeron" in cpu or "pentium" in cpu or "atom" in cpu:
+        return 0  
+
+    if "a4" in cpu or "a6" in cpu or "a8" in cpu:
+        return 1
+    if "a9" in cpu:
+        return 2
+    if "a10" in cpu or "a12" in cpu:
+        return 2  
+    if "e-series" in cpu or " e2-" in cpu:
+        return 1
+
+
+    if "m3" in cpu or "6y" in cpu or "7y" in cpu or "core m" in cpu:
+        return 1 
+
+   
+    if "ryzen 3" in cpu:
+        return 2
+    if "ryzen 5" in cpu:
+        return 3
+    if "ryzen 7" in cpu:
+        return 4
+    if "ryzen 9" in cpu:
+        return 5
+    
+    if "ryzen 1600" in cpu:
+ return 4
+
+   
+
+    
+    if "hq" in cpu or "hk" in cpu or "h " in cpu:
+        if "i5" in cpu:
+            return 4
+        if "i7" in cpu:
+            return 5
+        if "i9" in cpu:
+            return 6
+
+   
+    if "i3" in cpu:
+        return 2
+    if "i5" in cpu:
+        return 3
+    if "i7" in cpu:
+        return 4
+    if "i9" in cpu:
+        return 5
+
+ 
+    if "xeon" in cpu:
+        return 6  
+    return 2
+def gpu_tier(gpu):
+    g = gpu.lower().replace("  ", " ")
+       "uhd" in g or 
+        "r2" in g or 
+        "r4" in g):
+        return 0
+
+    
+    if ("iris" in g or
+        "vega" in g or
+        "intel graphics" in g):
+        return 1
+
+   
+    if ("r5" in g or 
+        "r7 m3" in g or 
+        "r5 m" in g or 
+        "m315" in g or 
+        "m330" in g or 
+        "m420" in g or 
+        "m430" in g or
+        "920m" in g or 
+        "920mx" in g or
+        "930m" in g or
+        "930mx" in g or
+        "940m" in g or
+        "940mx" in g):
+        return 2
+
+   
+    if ("mx130" in g or 
+        "mx150" in g or 
+        "rx 540" in g or 
+        "gtx 950m" in g or
+        "gtx 960" in g):
+        return 3
+
+    
+    if ("gtx 960m" in g or
+        "gtx 1050" in g or
+        "gtx 1050 ti" in g or
+        "gt 940mx" in g):   
+        return 4
+
+    
+    if ("gtx 1060" in g or
+        "gtx 1070" in g or
+        "gtx 1080" in g or
+        "gtx980" in g or 
+        "970m" in g or 
+        "980m" in g):
+        return 5
+
+   
+    if ("quadro" in g or
+        "firepro" in g or
+        "radeon pro" in g):
+        return 6
+
+   
+    return 2
+
+def cleaning(df):
+    df=df.copy()
+    df['Ram']=df['Ram'].str.replace("GB","").astype(int)
+    df['Weight']=df['Weight'].str.replace("kg","").astype(float)
+    df['clean_resolution'] = df['ScreenResolution'].str.extract(r'(\d+x\d+)', expand=False)
+    df['X_resolution'] = df['clean_resolution'].str.split('x').str[0].astype(int)
+    df['Y_resolution'] = df['clean_resolution'].str.split('x').str[1].astype(int)
+
+    df['ppi'] = ((df['X_resolution']**2 + df['Y_resolution']**2)**0.5 / df['Inches'])
+    df.drop(['ScreenResolution','clean_resolution','X_resolution','Y_resolution'],axis=1,inplace=True)
+    df["Cpu_Tier"] = df["Cpu"].apply(cpu_tier)
+    df["Gpu_Tier"] = df["Gpu"].apply(gpu_tier)
+    
+    df[['SSD', 'HDD', 'Hybrid', 'Flash']] = df['Memory'].apply(split_memory)
+    df.drop('Memory', axis=1, inplace=True)
+   
+    return df
+
+
+
+train=pd.read_csv("/kaggle/input/laptoprice-prodigy/LaptoPrice_train.csv")
+test=pd.read_csv("/kaggle/input/laptoprice-prodigy/LaptoPrice_test.csv")
+train=cleaning(train)
+test=cleaning(test)
+
+
+train['Price']=np.log(train['Price'])
+
+X_train=train.drop('Price',axis=1)
+Y_train=train['Price']
+X_test=test.drop('Price',axis=1)
+Y_test=test['Price']
+
+categorical=['Company','TypeName','Cpu','Gpu','OpSys']
+numerical=['Inches','Ram','Weight','ppi']
+cat_idx=[X_train.columns.get_loc(c) for c in categorical]
+
+# preprocess=ColumnTransformer(
+#     transformers=[
+#         ('cat',OneHotEncoder(drop='first',handle_unknown='ignore'),categorical),
+#         ('num','passthrough',numerical)
+#         ]
+# )
+
+cat_third_model=CatBoostRegressor(
+        iterations=3000,
+        depth=4,
+        learning_rate=0.035,
+        loss_function='RMSE',
+        random_strength=1.2,
+        l2_leaf_reg=6,
+        bagging_temperature=0.8,
+        rsm=0.85,
+        subsample=0.85,
+        border_count=254,
+        verbose=False
+    )
+
+
+X_train2, X_val, Y_train2, Y_val = train_test_split(
+    X_train, Y_train, test_size=0.2, random_state=42
+)
+cat_third_model.fit(X_train2, Y_train2,cat_features=cat_idx)
+val_pred_log = cat_third_model.predict(X_val)
+val_pred = np.exp(val_pred_log) 
+Y_val_real = np.exp(Y_val) 
+r2 = r2_score(Y_val_real, val_pred)
+print("R²:", r2)
+
+cat_third_model.fit(X_train,Y_train,cat_features=cat_idx)
+predicted_log=cat_third_model.predict(X_test)
+predicted=np.exp(predicted_log)
+
+test = test.rename(columns={'Unnamed: 0': 'id'})
+
+
+third_submission = pd.DataFrame({
+    "id":test["id"],
+    "Price":predicted
+})
+
+third_submission.to_csv("third submission.csv",index=False)
